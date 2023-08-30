@@ -1,4 +1,4 @@
-package main
+package converter
 
 import (
 	"encoding/base64"
@@ -24,7 +24,8 @@ func detectType(input string) string {
 	}
 }
 
-func parseConfig(input, detectedType string) (parsedConfig map[string]interface{}, err error) {
+// Parse the key-value's of the config to a map
+func ParseConfig(input, detectedType string) (parsedConfig map[string]interface{}, err error) {
 	err = nil
 	switch detectedType {
 	case "vmess":
