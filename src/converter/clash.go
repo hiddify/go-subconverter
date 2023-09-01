@@ -8,7 +8,6 @@ import (
 	"os"
 	"regexp"
 	"strings"
-	_ "strings"
 
 	"github.com/google/uuid"
 )
@@ -27,7 +26,7 @@ func getCipher(decodedConfig map[string]interface{}) string {
 }
 
 func getUUID(decodedConfig map[string]interface{}) string {
-	uuid := strings.ReplaceAll(decodedConfig["id"].(string), " ", "+")
+	uuid := strings.ReplaceAll(decodedConfig["id"].(string), " ", "-")
 	return uuid
 }
 
@@ -42,7 +41,7 @@ func getVMessTLS(decodedConfig map[string]interface{}) string {
 func getOpts(decodedConfig map[string]interface{}) string {
 	network, found := decodedConfig["net"]
 	if !found {
-		return ""
+		network = "tcp"
 	}
 
 	switch network {
@@ -74,7 +73,7 @@ func getVMessAEAD(decodedConfig map[string]interface{}) string {
 	return "false"
 }
 
-func processVMessClash(decodedConfig map[string]interface{}, outputType string) string {
+func ProcessVMessClash(decodedConfig map[string]interface{}, outputType string) string {
 	name := decodedConfig["ps"].(string)
 	if name == "" {
 		return ""
@@ -83,7 +82,7 @@ func processVMessClash(decodedConfig map[string]interface{}, outputType string) 
 	port := decodedConfig["port"].(float64) // Assuming port is a number
 	cipher := getCipher(decodedConfig)
 	uuid := getUUID(decodedConfig)
-	alterID := int(decodedConfig["aid"].(float64)) // Assuming alterId is a number
+	alterID := decodedConfig["aid"].(float64) // Assuming alterID is a number
 	tls := getVMessTLS(decodedConfig)
 	network, found := decodedConfig["net"]
 	if !found {
@@ -110,7 +109,7 @@ func processVMessClash(decodedConfig map[string]interface{}, outputType string) 
 	return strings.ReplaceAll(vmTemplate, ",,", ",")
 }
 
-func processTrojanClash(decodedConfig map[string]interface{}, outputType string) string {
+func ProcessTrojanClash(decodedConfig map[string]interface{}, outputType string) string {
 	name := decodedConfig["hash"].(string)
 	if name == "" {
 		return ""
@@ -126,7 +125,7 @@ func processTrojanClash(decodedConfig map[string]interface{}, outputType string)
 		}
 	}
 	skipCert := "false"
-	if allowInsecure, found := params["allowInsecure"]; found && allowInsecure == "1" {
+	if allowInsecure, found := params["allowInsecure"]; found && allowInsecure.(float64) > 0 {
 		skipCert = "true"
 	}
 
@@ -144,7 +143,7 @@ func processTrojanClash(decodedConfig map[string]interface{}, outputType string)
 	return trTemplate
 }
 
-func processShadowsocksClash(decodedConfig map[string]interface{}, outputType string) string {
+func ProcessShadowsocksClash(decodedConfig map[string]interface{}, outputType string) string {
 	preName, found := decodedConfig["name"]
 	if !found {
 		return ""
@@ -180,7 +179,7 @@ func getPort(decodedConfig map[string]interface{}) int {
 	return 443
 }
 
-func getSni(decodedConfig map[string]interface{}) string {
+func getSNI(decodedConfig map[string]interface{}) string {
 	if params, found := decodedConfig["params"].(map[string]interface{}); found {
 		sniValue, sniFound := params["sni"]
 		if sniFound {
@@ -190,7 +189,7 @@ func getSni(decodedConfig map[string]interface{}) string {
 	return ""
 }
 
-func getTls(decodedConfig map[string]interface{}) string {
+func getTLS(decodedConfig map[string]interface{}) string {
 	if params, found := decodedConfig["params"].(map[string]interface{}); found {
 		securityValue, securityFound := params["security"]
 		if securityFound && securityValue == "tls" {
@@ -220,7 +219,7 @@ func getNetwork(decodedConfig map[string]interface{}) string {
 	return "tcp"
 }
 
-func getWsOpts(decodedConfig map[string]interface{}) string {
+func getWSOpts(decodedConfig map[string]interface{}) string {
 	params, paramsFound := decodedConfig["params"].(map[string]interface{})
 	if !paramsFound || params["type"].(string) != "ws" {
 		return ""
@@ -288,7 +287,7 @@ func getUsername(decodedConfig map[string]interface{}) string {
 	return decodedConfig["username"].(string)
 }
 
-func processVLESSClash(decodedConfig map[string]interface{}, outputType string) string {
+func ProcessVLESSClash(decodedConfig map[string]interface{}, outputType string) string {
 	name := decodedConfig["hash"].(string)
 	if name == "" {
 		return ""
@@ -299,14 +298,14 @@ func processVLESSClash(decodedConfig map[string]interface{}, outputType string) 
 	if username == "" {
 		return ""
 	}
-	sni := getSni(decodedConfig)
-	tls := getTls(decodedConfig)
+	sni := getSNI(decodedConfig)
+	tls := getTLS(decodedConfig)
 	flow := getFlow(decodedConfig)
 	network := getNetwork(decodedConfig)
 	var opts string
 	switch network {
 	case "ws":
-		opts = getWsOpts(decodedConfig)
+		opts = getWSOpts(decodedConfig)
 	case "grpc":
 		opts = getGrpcOpts(decodedConfig)
 	}
@@ -337,19 +336,20 @@ func hasKey(m interface{}, key string) bool {
 func processConvert(config map[string]interface{}, configType, outputType string) string {
 	switch configType {
 	case "vmess":
-		return processVMessClash(config, outputType)
+		return ProcessVMessClash(config, outputType)
 	case "vless":
-		return processVLESSClash(config, outputType)
+		return ProcessVLESSClash(config, outputType)
 	case "trojan":
-		return processTrojanClash(config, outputType)
+		return ProcessTrojanClash(config, outputType)
 	case "ss":
-		return processShadowsocksClash(config, outputType)
+		return ProcessShadowsocksClash(config, outputType)
 	default:
 		return ""
 	}
 }
 
-func generateProxies(input, outputType string) string {
+// TODO: enable getting config from network source
+func GenerateProxies(input, outputType string) string {
 	var proxies strings.Builder
 
 	var v2raySubscription []byte
@@ -451,7 +451,7 @@ func fullConfig(input, configType string, protocol string) string {
 	configProxyGroup := getConfigProxyGroup(configType)
 	configProxyRules := getConfigProxyRules(configType)
 
-	proxies := generateProxies(input, configType)
+	proxies := GenerateProxies(input, configType)
 	configsName := extractNames(proxies, configType)
 	fullConfigs := generateFullConfig(configStart, proxies, configProxyGroup, configProxyRules, configsName, configType)
 	return fullConfigs
@@ -661,11 +661,11 @@ func processURL(args []string, stdin *os.File) {
 	var result string
 	switch process {
 	case "name":
-		result = extractNames(generateProxies(urlStr, configType), configType)
+		result = extractNames(GenerateProxies(urlStr, configType), configType)
 	case "full":
 		result = strings.ReplaceAll(fullConfig(urlStr, configType, protocol), "\\", "")
 	default:
-		result = generateProxies(urlStr, configType)
+		result = GenerateProxies(urlStr, configType)
 	}
 
 	fmt.Println(result)
