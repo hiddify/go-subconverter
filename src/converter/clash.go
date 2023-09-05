@@ -4,9 +4,10 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"net/url"
-	"os"
+	"io"
+	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
@@ -66,8 +67,8 @@ func escapeHTML(s string) string {
 }
 
 func getVMessAEAD(decodedConfig map[string]interface{}) string {
-	alterID := decodedConfig["aid"].(string)
-	if alterID == "0" {
+	alterID, err := getNumber(decodedConfig["aid"])
+	if err == nil && alterID == 0 {
 		return "true"
 	}
 	return "false"
@@ -79,10 +80,13 @@ func ProcessVMessClash(decodedConfig map[string]interface{}, outputType string) 
 		return ""
 	}
 	server := decodedConfig["add"].(string)
-	port := decodedConfig["port"].(float64) // Assuming port is a number
+	port, err := getNumber(decodedConfig["port"]) // Assuming port is a number
+	if err != nil {
+		return ""
+	}
 	cipher := getCipher(decodedConfig)
 	uuid := getUUID(decodedConfig)
-	alterID := decodedConfig["aid"].(float64) // Assuming alterID is a number
+	alterID := int(decodedConfig["aid"].(float64)) // Assuming alterID is a number
 	tls := getVMessTLS(decodedConfig)
 	network, found := decodedConfig["net"]
 	if !found {
@@ -95,12 +99,12 @@ func ProcessVMessClash(decodedConfig map[string]interface{}, outputType string) 
 
 	switch outputType {
 	case "clash", "meta":
-		vmTemplate = fmt.Sprintf(`  - {"name":"%s","type":"vmess","server":"%s","port":%d%s,"uuid":"%s","alterId":%d,"tls":%s,"skip-cert-verify":true,"network":"%s"%s,"client-fingerprint":"chrome"}`,
-			name, server, int(port), cipher, uuid, alterID, tls, network, opts)
+		vmTemplate = fmt.Sprintf(`  - {"name":"%s","type":"vmess","server":"%s","port":%d%s,"uuid":"%s","alterId":%d,"tls":%s,"skip-cert-verify":false,"network":"%s"%s,"client-fingerprint":"chrome"}`,
+			name, server, port, cipher, uuid, alterID, tls, network, opts)
 	case "surfboard":
 		if network == "ws" {
-			vmTemplate = fmt.Sprintf(`%s = vmess, %s, %d, username = %s, ws = true, tls = %s, vmess-aead = %s, ws-path = %s, ws-headers = Host:%q, skip-cert-verify = true, tfo = false`,
-				name, server, int(port), uuid, tls, vmessAEAD, escapeHTML(decodedConfig["path"].(string)), decodedConfig["host"].(string))
+			vmTemplate = fmt.Sprintf(`%s = vmess, %s, %d, username = %s, ws = true, tls = %s, vmess-aead = %s, ws-path = %s, ws-headers = Host:%q, skip-cert-verify = false, tfo = false`,
+				name, server, port, uuid, tls, vmessAEAD, escapeHTML(decodedConfig["path"].(string)), decodedConfig["host"].(string))
 		} else {
 			return ""
 		}
@@ -115,7 +119,10 @@ func ProcessTrojanClash(decodedConfig map[string]interface{}, outputType string)
 		return ""
 	}
 	server := decodedConfig["hostname"].(string)
-	port := decodedConfig["port"].(float64) // Assuming port is a number
+	port, err := getNumber(decodedConfig["port"]) // Assuming port is a number
+	if err != nil {
+		return ""
+	}
 	username := decodedConfig["username"].(string)
 	sni := ""
 	params, found := decodedConfig["params"].(map[string]interface{})
@@ -125,8 +132,13 @@ func ProcessTrojanClash(decodedConfig map[string]interface{}, outputType string)
 		}
 	}
 	skipCert := "false"
-	if allowInsecure, found := params["allowInsecure"]; found && allowInsecure.(float64) > 0 {
-		skipCert = "true"
+	if allowInsecure, found := params["allowInsecure"]; found {
+		if insec, ok := allowInsecure.(bool); ok && insec {
+			skipCert = "true"
+		}
+		if num, ok := allowInsecure.(float64); ok && num > 0 {
+			skipCert = "true"
+		}
 	}
 
 	var trTemplate string
@@ -134,10 +146,10 @@ func ProcessTrojanClash(decodedConfig map[string]interface{}, outputType string)
 	switch outputType {
 	case "clash", "meta":
 		trTemplate = fmt.Sprintf(`  - {"name":"%s","type":"trojan","server":"%s","port":%d,"udp":false,"password":"%s"%s,"skip-cert-verify":%s,"network":"tcp","client-fingerprint":"chrome"}`,
-			name, server, int(port), username, sni, skipCert)
+			name, server, port, username, sni, skipCert)
 	case "surfboard":
 		trTemplate = fmt.Sprintf(`%s = trojan, %s, %d, password = %s, udp-delay = true, skip-cert-verify = %s, sni = %s, ws = false`,
-			name, server, int(port), username, skipCert, sni)
+			name, server, port, username, skipCert, sni)
 	}
 
 	return trTemplate
@@ -153,7 +165,10 @@ func ProcessShadowsocksClash(decodedConfig map[string]interface{}, outputType st
 		return ""
 	}
 	server := decodedConfig["server_address"].(string)
-	port := decodedConfig["server_port"].(float64) // Assuming port is a number
+	port, err := getNumber(decodedConfig["server_port"]) // Assuming port is a number
+	if err != nil {
+		return ""
+	}
 	password := decodedConfig["password"].(string)
 	cipher := decodedConfig["encryption_method"].(string)
 
@@ -173,8 +188,11 @@ func ProcessShadowsocksClash(decodedConfig map[string]interface{}, outputType st
 
 func getPort(decodedConfig map[string]interface{}) int {
 	portValue, found := decodedConfig["port"]
-	if found && portValue != "" {
-		return int(portValue.(float64)) // Assuming port is a number
+	if found {
+		res, err := getNumber(portValue)
+		if err == nil {
+			return int(res)
+		}
 	}
 	return 443
 }
@@ -348,17 +366,24 @@ func processConvert(config map[string]interface{}, configType, outputType string
 	}
 }
 
-// TODO: enable getting config from network source
-func GenerateProxies(input, outputType string) string {
-	var proxies strings.Builder
+func GenerateProxies(input, outputType string) (string, error) {
+	var proxies, totalErr strings.Builder
 
 	var v2raySubscription []byte
 	if isValidAddress(input) {
-		data, err := base64.StdEncoding.DecodeString(input)
+		resp, err := http.Get(input)
+		if err != nil {
+			return "", fmt.Errorf("Could not fetch the provided subscription: %v", err)
+		}
+		inputData, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return "", fmt.Errorf("Could not read the provided subscription: %v", err)
+		}
+		data, err := base64.StdEncoding.DecodeString(string(inputData))
 		if err == nil {
 			v2raySubscription = data
 		} else {
-			v2raySubscription = []byte(input)
+			v2raySubscription = inputData
 		}
 	} else {
 		data, err := base64.StdEncoding.DecodeString(input)
@@ -375,7 +400,10 @@ func GenerateProxies(input, outputType string) string {
 		configType := detectType(config)
 		decodedConfig, err := ParseConfig(config, configType)
 		if err != nil {
-			// TODO: Handle this error more gracefully
+			if totalErr.Len() == 0 {
+				totalErr.WriteString("One or more errors during the conversion of configurations:\n")
+			}
+			totalErr.WriteString(fmt.Sprintf("%v\n", err))
 			continue
 		}
 		convertedConfig := processConvert(decodedConfig, configType, outputType)
@@ -384,7 +412,16 @@ func GenerateProxies(input, outputType string) string {
 		}
 	}
 
-	return proxies.String()
+	if proxies.Len() == 0 {
+		totalErr.WriteString("No configuration converted\n")
+	}
+
+	var outputErr error
+	if totalErr.Len() > 0 {
+		outputErr = fmt.Errorf("%s", totalErr.String())
+	}
+
+	return proxies.String(), outputErr
 }
 
 func suitableOutput(input []string, outputType string) []string {
@@ -422,7 +459,7 @@ func extractNames(configs, outputType string) string {
 			}
 			pattern := `"name":"(.*?)"`
 			matches := extractStringSubmatches(pattern, configData)
-			if len(matches) > 0 {
+			if len(matches) > 0 { // the first match is the whole pattern
 				configsName.WriteString(fmt.Sprintf("      - '%s'\n", matches[1]))
 			}
 		}
@@ -444,20 +481,21 @@ func extractStringSubmatches(pattern, input string) []string {
 	return matches
 }
 
-func fullConfig(input, configType string, protocol string) string {
-	surfURL := "https://raw.githubusercontent.com/yebekhe/TelegramV2rayCollector/main/surfboard/" + protocol
-
-	configStart := getConfigStart(configType, surfURL)
+func FullConfig(input, configType string) (string, error) {
+	configStart := getConfigStart(configType)
 	configProxyGroup := getConfigProxyGroup(configType)
 	configProxyRules := getConfigProxyRules(configType)
 
-	proxies := GenerateProxies(input, configType)
+	proxies, err := GenerateProxies(input, configType)
+	if len(proxies) == 0 {
+		return "", err
+	}
 	configsName := extractNames(proxies, configType)
 	fullConfigs := generateFullConfig(configStart, proxies, configProxyGroup, configProxyRules, configsName, configType)
-	return fullConfigs
+	return fullConfigs, err
 }
 
-func getConfigStart(configType, surfURL string) []string {
+func getConfigStart(configType string) []string {
 	return map[string][]string{
 		"clash": {
 			"port: 7890",
@@ -466,7 +504,7 @@ func getConfigStart(configType, surfURL string) []string {
 			"mode: Rule",
 			"log-level: info",
 			"ipv6: true",
-			"external-controller: 0.0.0.0:9090",
+			"external-controller: 127.0.0.1:9090",
 		},
 		"meta": {
 			"port: 7890",
@@ -475,10 +513,9 @@ func getConfigStart(configType, surfURL string) []string {
 			"mode: Rule",
 			"log-level: info",
 			"ipv6: true",
-			"external-controller: 0.0.0.0:9090",
+			"external-controller: 127.0.0.1:9090",
 		},
 		"surfboard": {
-			"#!MANAGED-CONFIG " + surfURL + " interval=60 strict=false",
 			"",
 			"[General]",
 			"loglevel = notify",
@@ -634,61 +671,32 @@ func generateFullConfig(
 	return output
 }
 
-func processURL(args []string, stdin *os.File) {
-	queryValues, err := getQueryValues(args, stdin)
-	if err != nil {
-		handleError(err)
-		return
-	}
-
-	urlStr := queryValues.Get("url")
+func ProcessURL(urlStr, configType, process string) (string, error) {
 	if urlStr == "" {
-		handleError(fmt.Errorf("url parameter is missing or invalid"))
-		return
+		return "", fmt.Errorf("URL parameter is missing or invalid")
 	}
 
 	typeArray := []string{"clash", "meta", "surfboard"}
 
-	configType := queryValues.Get("type")
 	if configType == "" || !contains(typeArray, configType) {
-		handleError(fmt.Errorf("type parameter is missing or invalid"))
-		return
+		return "", fmt.Errorf("type parameter is missing or invalid")
 	}
-
-	process := queryValues.Get("process")
-	protocol := queryValues.Get("protocol")
 
 	var result string
+	var err error
+
 	switch process {
 	case "name":
-		result = extractNames(GenerateProxies(urlStr, configType), configType)
+		result, err = GenerateProxies(urlStr, configType)
+		result = extractNames(result, configType)
+		return result, err
 	case "full":
-		result = strings.ReplaceAll(fullConfig(urlStr, configType, protocol), "\\", "")
+		result, err = FullConfig(urlStr, configType)
+		result = strings.ReplaceAll(result, "\\", "")
+		return result, err
 	default:
-		result = GenerateProxies(urlStr, configType)
+		return GenerateProxies(urlStr, configType)
 	}
-
-	fmt.Println(result)
-}
-
-func getQueryValues(args []string, stdin *os.File) (url.Values, error) {
-	if len(args) > 1 {
-		queryStr := args[1]
-		return url.ParseQuery(queryStr)
-	}
-
-	stat, _ := stdin.Stat()
-	if (stat.Mode() & os.ModeCharDevice) == 0 {
-		buffer := make([]byte, stat.Size())
-		_, err := stdin.Read(buffer)
-		if err != nil {
-			return nil, err
-		}
-		queryStr := string(buffer)
-		return url.ParseQuery(queryStr)
-	}
-
-	return nil, fmt.Errorf("no input provided")
 }
 
 func contains(arr []string, value string) bool {
@@ -700,11 +708,13 @@ func contains(arr []string, value string) bool {
 	return false
 }
 
-func handleError(err error) {
-	output := map[string]interface{}{
-		"ok":     false,
-		"result": err.Error(),
+func getNumber(val interface{}) (int64, error) {
+	if flt, ok := val.(float64); ok {
+		return int64(flt), nil
 	}
-	outputBytes, _ := json.MarshalIndent(output, "", "  ")
-	fmt.Println(string(outputBytes))
+	if flt, ok := val.(float32); ok {
+		return int64(flt), nil
+	}
+	str := fmt.Sprintf("%v", val)
+	return strconv.ParseInt(str, 10, 60)
 }

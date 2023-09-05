@@ -7,6 +7,8 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+
+	"github.com/google/uuid"
 )
 
 func detectType(input string) string {
@@ -55,13 +57,27 @@ func parseProxyURL(proxyURL, proxyType string) (map[string]interface{}, error) {
 		return nil, err
 	}
 	params := parsedURL.Query()
+	paramsMap := make(map[string]interface{})
+	for k, v := range params {
+		if len(v) == 0 {
+			continue
+		}
+		paramsMap[k] = v[0]
+	}
 	output := map[string]interface{}{
 		"protocol": proxyType,
 		"username": parsedURL.User.Username(),
 		"hostname": parsedURL.Hostname(),
 		"port":     parsedURL.Port(),
-		"params":   params,
+		"params":   paramsMap,
 		"hash":     parsedURL.Fragment,
+	}
+	if parsedURL.Fragment == "" {
+		uuidObj, err := uuid.NewRandom()
+		if err != nil {
+			return output, err
+		}
+		output["hash"] = "unnamed-" + uuidObj.String()
 	}
 	return output, nil
 }
@@ -71,7 +87,11 @@ func parseShadowsocks(configStr string) (map[string]interface{}, error) {
 	if err != nil {
 		return nil, err
 	}
-	userInfo := strings.Split(parsedURL.User.String(), ":")
+	userString := parsedURL.User.String()
+	if dec, err := base64.StdEncoding.DecodeString(userString); err == nil {
+		userString = string(dec)
+	}
+	userInfo := strings.Split(userString, ":")
 	encryptionMethod := userInfo[0]
 	password := userInfo[1]
 	serverAddress := parsedURL.Hostname()
@@ -107,8 +127,11 @@ func isValidAddress(address string) bool {
 			_, err := url.ParseRequestURI(address)
 			return err == nil
 		}
+		if _, err := url.Parse(address); err == nil { // is a vpn link
+			return false
+		}
 		urlWithScheme := "https://" + address
-		_, err := url.ParseRequestURI(urlWithScheme)
+		_, err := url.Parse(urlWithScheme)
 		return err == nil
 	}
 	return false
